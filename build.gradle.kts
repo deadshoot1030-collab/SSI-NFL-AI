@@ -1,6 +1,19 @@
-plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
-android { namespace = "com.ssinflu.ai"; compileSdk = 35
- defaultConfig { applicationId = "com.ssinflu.ai"; minSdk = 26; targetSdk = 35; versionCode = 4; versionName = "0.4" }
- compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
- kotlinOptions { jvmTarget = "17" }
+
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
 }
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "SSI-NFL-AI"
+include(":app")
