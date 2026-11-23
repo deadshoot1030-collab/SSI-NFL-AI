@@ -1,0 +1,35 @@
+
+name: SSI NFL AI - Scheduled Evaluation
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '13 */6 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  evaluation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run NFL evaluation
+        run: python3 scripts/nfl_audit.py
+
+      - name: Upload evaluation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nfl-evaluation-report
+          path: reports/nfl_audit.json
+          if-no-files-found: warn
