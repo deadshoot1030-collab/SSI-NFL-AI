@@ -4,135 +4,190 @@ import io
 import json
 import math
 import urllib.request
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import date
+from itertools import groupby
 from pathlib import Path
 
 URL = "https://github.com/nflverse/nflverse-data/releases/download/schedules/games.csv"
 
+def sigmoid(x):
+    return 1 / (1 + math.exp(-max(-30, min(30, x))))
+
 def load_games():
-    request = urllib.request.Request(
-        URL, headers={"User-Agent": "SSI-NFL-AI/1.0"}
+    req = urllib.request.Request(
+        URL, headers={"User-Agent": "SSI-AI/2.0"}
     )
-    with urllib.request.urlopen(request, timeout=45) as response:
-        data = response.read(25_000_001)
-
-    if len(data) > 25_000_000:
-        raise ValueError("CSV is too large")
-
-    games = []
-    reader = csv.DictReader(io.StringIO(data.decode("utf-8-sig")))
-
-    for row in reader:
-        try:
-            home = row["home_team"].strip()
-            away = row["away_team"].strip()
-            hs = int(row["home_score"])
-            aws = int(row["away_score"])
-            day = date.fromisoformat(
-                (row.get("gameday") or row.get("date") or "")[:10]
-            )
-            if home and away and home != away and min(hs, aws) >= 0:
-                games.append((day, home, away, hs, aws))
-        except (ValueError, TypeError, KeyError):
-            continue
-
+    with urllib.request.urlopen(req, timeout=90) as r:
+        rows = csv.DictReader(
+            io.StringIO(r.read().decode("utf-8-sig"))
+        )
+        games = []
+        for row in rows:
+            try:
+                d = date.fromisoformat(row["gameday"])
+                h = row["home_team"]
+                a = row["away_team"]
+                hs = int(row["home_score"])
+                aws = int(row["away_score"])
+                neutral = int(row.get("location") == "Neutral")
+                games.append((d, h, a, hs, aws, neutral))
+            except (ValueError, TypeError, KeyError):
+                continue
     return sorted(games)
 
-def evaluate(games, k=20, home_adv=55, score_from=None):
-    ratings = defaultdict(lambda: 1500.0)
-    groups = defaultdict(list)
+def avg(values):
+    return sum(values) / len(values) if values else 0
 
-    for game in games:
-        groups[game[0]].append(game)
+def evaluate(games, config):
+    k, advantage, rate, mode = config
+    elo = defaultdict(lambda: 1500.0)
+    margins = defaultdict(lambda: deque(maxlen=10))
+    wins = defaultdict(lambda: deque(maxlen=5))
+    scored = defaultdict(lambda: deque(maxlen=10))
+    allowed = defaultdict(lambda: deque(maxlen=10))
+    last = {}
+    weights = [0.0] * 7
+    results = defaultdict(list)
 
-    correct = 0
-    count = 0
-    brier = 0.0
-    log_loss = 0.0
+    for day, group in groupby(games, key=lambda g: g[0]):
+        pending = []
 
-    for day, group in sorted(groups.items()):
-        predictions = []
+        for _, h, a, hs, aws, neutral in group:
+            rest_h = min(21, (day-last[h]).days) if h in last else 7
+            rest_a = min(21, (day-last[a]).days) if a in last else 7
 
-        for _, home, away, hs, aws in group:
-            p = 1 / (
-                1 + 10 ** (
-                    (ratings[away] - ratings[home] - home_adv) / 400
-                )
+            diff = elo[h] - elo[a]
+            home = advantage * (1-neutral)
+
+            pe = sigmoid(
+                math.log(10) * (diff+home) / 400
             )
-            predictions.append((home, away, hs, aws, p))
 
-        for home, away, hs, aws, p in predictions:
-            if score_from is not None and day < score_from:
-                continue
-            if hs == aws:
-                continue
+            x = [
+                1.0-neutral,
+                diff/400,
+                (avg(margins[h])-avg(margins[a]))/20,
+                avg(wins[h])-avg(wins[a]),
+                (rest_h-rest_a)/14,
+                (avg(scored[h])-avg(scored[a]))/20,
+                (avg(allowed[a])-avg(allowed[h]))/20
+            ]
 
-            y = int(hs > aws)
-            count += 1
-            if p != 0.5 and (p > 0.5) == bool(y):
-                correct += 1
+            pl = sigmoid(sum(w*v for w, v in zip(weights, x)))
 
-            brier += (p - y) ** 2
-            safe_p = max(1e-9, min(1 - 1e-9, p))
-            log_loss -= y * math.log(safe_p) + (
-                1 - y
-            ) * math.log(1 - safe_p)
+            if mode == "elo":
+                p = pe
+            elif mode == "adaptive":
+                p = pl
+            else:
+                p = (pe+pl)/2
 
-        for home, away, hs, aws, p in predictions:
-            outcome = 1 if hs > aws else 0 if hs < aws else 0.5
-            delta = k * (outcome - p)
-            ratings[home] += delta
-            ratings[away] -= delta
+            y = 1 if hs > aws else 0 if hs < aws else 0.5
 
-    if count == 0:
-        raise ValueError("No games to evaluate")
+            if y != 0.5:
+                if 2015 <= day.year < 2023:
+                    results["validation"].append((p, y))
+                elif day.year >= 2023:
+                    results["test"].append((p, y))
+
+            pending.append((h, a, hs, aws, pe, pl, x, y))
+
+        # Learn only after all predictions for the day.
+        for h, a, hs, aws, pe, pl, x, y in pending:
+            delta = k*(y-pe)
+            elo[h] += delta
+            elo[a] -= delta
+
+            for i in range(len(weights)):
+                weights[i] += rate * (
+                    (y-pl)*x[i] - 0.001*weights[i]
+                )
+
+            margins[h].append(hs-aws)
+            margins[a].append(aws-hs)
+            wins[h].append(y)
+            wins[a].append(1-y)
+            scored[h].append(hs)
+            scored[a].append(aws)
+            allowed[h].append(aws)
+            allowed[a].append(hs)
+            last[h] = day
+            last[a] = day
+
+    return results
+
+def metrics(rows):
+    n = len(rows)
+    if not n:
+        raise ValueError("No evaluation games")
+
+    correct = sum(
+        p != 0.5 and (p > 0.5) == bool(y)
+        for p, y in rows
+    )
+
+    loss = sum(
+        -math.log(max(1e-12, p if y else 1-p))
+        for p, y in rows
+    ) / n
 
     return {
-        "games": count,
-        "accuracy": round(correct / count, 5),
-        "brier": round(brier / count, 5),
-        "log_loss": round(log_loss / count, 5),
+        "games": n,
+        "correct": correct,
+        "accuracy_percent": round(100*correct/n, 4),
+        "brier": round(sum((p-y)**2 for p,y in rows)/n, 6),
+        "log_loss": round(loss, 6)
     }
 
 def main():
     games = load_games()
     if len(games) < 500:
-        raise ValueError("Insufficient historical games")
+        raise ValueError("Insufficient historical data")
 
-    training = [g for g in games if g[0].year < 2023]
-    if len(training) < 200:
-        raise ValueError("Insufficient training games")
-
+    history = [g for g in games if g[0].year < 2023]
     candidates = []
 
     for k in (10, 20, 30, 40):
-        for advantage in (30, 55, 80):
-            result = evaluate(
-                training, k, advantage, date(2015, 1, 1)
-            )
-            candidates.append(
-                (result["log_loss"], k, advantage)
-            )
+        for adv in (30, 55, 80):
+            for rate in (0.005, 0.02, 0.05):
+                for mode in ("elo", "adaptive", "ensemble"):
+                    config = (k, adv, rate, mode)
+                    result = evaluate(history, config)
+                    score = metrics(result["validation"])
+                    candidates.append((score["log_loss"], config))
 
-    _, best_k, best_advantage = min(candidates)
+    _, best = min(candidates)
 
-    result = evaluate(
-        games, best_k, best_advantage, date(2023, 1, 1)
+    final = metrics(evaluate(games, best)["test"])
+
+    baseline = metrics(
+        evaluate(games, (30, 30, 0.02, "elo"))["test"]
     )
 
     report = {
-        "model": "NFL Elo",
-        "training_period": "Before 2023",
-        "holdout_period": "2023 onward",
-        "selected_k": best_k,
-        "selected_home_advantage": best_advantage,
-        **result,
+        "version": "SSI AI 2.0",
+        "models_tested": len(candidates),
+        "selected_model": best[3],
+        "selected_k": best[0],
+        "selected_home_advantage": best[1],
+        "learning_rate": best[2],
+        "baseline": baseline,
+        "new_model": final,
+        "improvement_pp": round(
+            final["accuracy_percent"] -
+            baseline["accuracy_percent"], 4
+        ),
+        "target_70_reached": final["accuracy_percent"] >= 70,
+        "target_75_reached": final["accuracy_percent"] >= 75,
+        "target_80_reached": final["accuracy_percent"] >= 80,
+        "target_85_reached": final["accuracy_percent"] >= 85
     }
 
     Path("reports").mkdir(exist_ok=True)
     Path("reports/nfl_audit.json").write_text(
-        json.dumps(report, indent=2), encoding="utf-8"
+        json.dumps(report, indent=2),
+        encoding="utf-8"
     )
 
     print(json.dumps(report, indent=2))
