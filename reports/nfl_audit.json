@@ -6,20 +6,20 @@
   "selected_home_advantage": 30,
   "learning_rate": 0.02,
   "baseline": {
-    "games": 1063,
+    "games": 1064,
     "correct": 684,
-    "accuracy_percent": 64.3462,
-    "brier": 0.225865,
-    "log_loss": 0.644463
+    "accuracy_percent": 64.2857,
+    "brier": 0.226025,
+    "log_loss": 0.64479
   },
   "new_model": {
-    "games": 1063,
+    "games": 1064,
     "correct": 702,
-    "accuracy_percent": 66.0395,
-    "brier": 0.219846,
-    "log_loss": 0.629674
+    "accuracy_percent": 65.9774,
+    "brier": 0.219989,
+    "log_loss": 0.629967
   },
-  "improvement_pp": 1.6933,
+  "improvement_pp": 1.6917,
   "target_70_reached": false,
   "target_75_reached": false,
   "target_80_reached": false,
