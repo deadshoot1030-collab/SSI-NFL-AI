@@ -3,7 +3,7 @@ name: SSI NFL AI - Continuous Learning
 on:
   workflow_dispatch:
   schedule:
-    - cron: '17 */2 * * *'
+    - cron: '17,47 * * * *'
 
 permissions:
   contents: write
