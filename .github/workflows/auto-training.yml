@@ -1,35 +1,46 @@
-
-name: SSI NFL AI - Scheduled Evaluation
+name: SSI NFL AI - Continuous Learning
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '13 */6 * * *'
+    - cron: '17 */2 * * *'
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: ssi-nfl-training
+  cancel-in-progress: false
 
 jobs:
-  evaluation:
+  training:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Run NFL evaluation
+      - name: Train and evaluate
         run: python3 scripts/nfl_audit.py
 
-      - name: Upload evaluation report
-        if: always()
+      - name: Upload report
         uses: actions/upload-artifact@v4
         with:
-          name: nfl-evaluation-report
+          name: nfl-training-report
           path: reports/nfl_audit.json
-          if-no-files-found: warn
+
+      - name: Save results
+        run: |
+          git config user.name "SSI NFL AI"
+          git config user.email "ssi-ai@users.noreply.github.com"
+          git add reports/nfl_audit.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Update NFL evaluation results"
+            git push
+          fi
